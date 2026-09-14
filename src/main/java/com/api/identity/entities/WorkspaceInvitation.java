@@ -71,4 +71,9 @@ public class WorkspaceInvitation {
     @UpdateTimestamp
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
+
+    // Fijado una vez en sendInvitation (o refrescado en resendInvitation) — nunca calculado a
+    // partir de createdAt en otro lado, para que reenviar realmente extienda el plazo.
+    @Column(name = "expires_at", nullable = false)
+    private LocalDateTime expiresAt;
 }

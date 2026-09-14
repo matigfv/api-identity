@@ -114,6 +114,28 @@ public class WorkspaceInvitationController {
     }
 
     @Operation(
+            summary = "Reenviar una invitación enviada",
+            description = "Extiende el vencimiento de una invitación pendiente enviada por el usuario "
+                    + "autenticado otros 7 días y vuelve a publicar el evento de invitación creada, para que "
+                    + "el invitado reciba otra notificación en vivo. No hay canal de email en el suite — esto "
+                    + "no reenvía ningún correo, solo refresca la invitación.",
+            responses = {
+                    @ApiResponse(responseCode = "200", description = "Invitación reenviada"),
+                    @ApiResponse(
+                            responseCode = "404",
+                            description = "Invitación inexistente o no enviada por el usuario autenticado"
+                    ),
+                    @ApiResponse(responseCode = "400", description = "La invitación no está pendiente"),
+                    @ApiResponse(responseCode = "429", description = "Límite de invitaciones enviadas alcanzado")
+            }
+    )
+    @PatchMapping("/{invitationId}/resend")
+    @ResponseStatus(HttpStatus.OK)
+    public void resendInvitation(@PathVariable Long invitationId) {
+        workspaceInvitationService.resendInvitation(invitationId);
+    }
+
+    @Operation(
             summary = "Aceptar o rechazar invitación",
             description = "Acepta o rechaza, según el campo status, la invitación indicada por id, "
                     + "recibida por el usuario autenticado.",

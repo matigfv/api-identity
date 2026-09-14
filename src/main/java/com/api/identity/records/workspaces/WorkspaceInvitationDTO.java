@@ -13,5 +13,11 @@ public record WorkspaceInvitationDTO(
         String invitedByEmail,
         InvitationStatus status,
         WorkspaceRole role,
-        LocalDateTime createdAt) implements Serializable {
+        LocalDateTime createdAt,
+        LocalDateTime expiresAt,
+        // Derivado de expiresAt, no un status propio en la DB — una invitación PENDING vencida
+        // sigue siendo PENDING hasta que alguien actúe (aceptar/rechazar la rechaza igual con
+        // BusinessException); esto es lo que le permite al frontend mostrarla como "vencida" en
+        // vez de con los botones de aceptar/rechazar normales.
+        boolean expired) implements Serializable {
 }

@@ -26,6 +26,8 @@ import org.slf4j.MDC
 import spock.lang.Specification
 import spock.lang.Unroll
 
+import java.time.LocalDateTime
+
 class WorkspaceInvitationServiceTest extends Specification {
 
     WorkspaceInvitationRepository workspaceInvitationRepository = Mock(WorkspaceInvitationRepository)
@@ -55,6 +57,8 @@ class WorkspaceInvitationServiceTest extends Specification {
     def inviter = User.builder().id(1L).email("owner@example.com").build()
     def invited = User.builder().id(2L).email("invited@example.com").build()
     def workspace = Workspace.builder().id(10L).name("Casa").build()
+    def futureExpiry = LocalDateTime.now().plusDays(1)
+    def pastExpiry = LocalDateTime.now().minusDays(1)
 
     def cleanup() {
         MDC.clear()
@@ -174,7 +178,7 @@ class WorkspaceInvitationServiceTest extends Specification {
         given:
         def invitation = WorkspaceInvitation.builder()
                 .id(5L).invitedUser(invited).invitedBy(inviter).workspace(workspace)
-                .status(InvitationStatus.PENDING).role(role).build()
+                .status(InvitationStatus.PENDING).role(role).expiresAt(futureExpiry).build()
         userService.getAuthenticatedUser() >> invited
         workspaceInvitationRepository.findById(5L) >> Optional.of(invitation)
 
@@ -196,7 +200,7 @@ class WorkspaceInvitationServiceTest extends Specification {
         given:
         def invitation = WorkspaceInvitation.builder()
                 .id(5L).invitedUser(invited).invitedBy(inviter).workspace(workspace)
-                .status(InvitationStatus.PENDING).build()
+                .status(InvitationStatus.PENDING).expiresAt(futureExpiry).build()
         MDC.put("correlationId", "trace-xyz")
         userService.getAuthenticatedUser() >> invited
         workspaceInvitationRepository.findById(5L) >> Optional.of(invitation)
@@ -212,7 +216,7 @@ class WorkspaceInvitationServiceTest extends Specification {
         given:
         def invitation = WorkspaceInvitation.builder()
                 .id(5L).invitedUser(invited).invitedBy(inviter).workspace(workspace)
-                .status(InvitationStatus.PENDING).build()
+                .status(InvitationStatus.PENDING).expiresAt(futureExpiry).build()
         userService.getAuthenticatedUser() >> invited
         workspaceInvitationRepository.findById(5L) >> Optional.of(invitation)
 
@@ -231,7 +235,7 @@ class WorkspaceInvitationServiceTest extends Specification {
         def stranger = User.builder().id(99L).email("stranger@example.com").build()
         def invitation = WorkspaceInvitation.builder()
                 .id(5L).invitedUser(invited).invitedBy(inviter).workspace(workspace)
-                .status(InvitationStatus.PENDING).build()
+                .status(InvitationStatus.PENDING).expiresAt(futureExpiry).build()
         userService.getAuthenticatedUser() >> stranger
         workspaceInvitationRepository.findById(5L) >> Optional.of(invitation)
 
@@ -246,7 +250,7 @@ class WorkspaceInvitationServiceTest extends Specification {
         given:
         def invitation = WorkspaceInvitation.builder()
                 .id(5L).invitedUser(invited).invitedBy(inviter).workspace(workspace)
-                .status(InvitationStatus.ACCEPTED).build()
+                .status(InvitationStatus.ACCEPTED).expiresAt(futureExpiry).build()
         userService.getAuthenticatedUser() >> invited
         workspaceInvitationRepository.findById(5L) >> Optional.of(invitation)
 
@@ -257,11 +261,28 @@ class WorkspaceInvitationServiceTest extends Specification {
         thrown(BusinessException)
     }
 
+    def "acceptRejectInvitation - throws BusinessException when the invitation expired"() {
+        given:
+        def invitation = WorkspaceInvitation.builder()
+                .id(5L).invitedUser(invited).invitedBy(inviter).workspace(workspace)
+                .status(InvitationStatus.PENDING).expiresAt(pastExpiry).build()
+        userService.getAuthenticatedUser() >> invited
+        workspaceInvitationRepository.findById(5L) >> Optional.of(invitation)
+
+        when:
+        service.acceptRejectInvitation(new AcceptRejectInvitationDTO(5L, true))
+
+        then:
+        thrown(BusinessException)
+        0 * workspaceMembershipService.addMembership(_, _, _)
+        0 * workspaceInvitationRepository.save(_)
+    }
+
     def "getSentInvitations - returns the authenticated user's sent invitations, most recent first"() {
         given:
         def sent = [WorkspaceInvitation.builder().id(7L).invitedUser(invited).invitedBy(inviter).workspace(workspace)
-                .status(InvitationStatus.PENDING).build()]
-        def dto = new WorkspaceSentInvitationDTO(7L, 10L, "Casa", "invited@example.com", InvitationStatus.PENDING, WorkspaceRole.COLLABORATOR, null)
+                .status(InvitationStatus.PENDING).expiresAt(futureExpiry).build()]
+        def dto = new WorkspaceSentInvitationDTO(7L, 10L, "Casa", "invited@example.com", InvitationStatus.PENDING, WorkspaceRole.COLLABORATOR, null, futureExpiry, false)
         userService.getAuthenticatedUser() >> inviter
         workspaceInvitationRepository.findByInvitedByIdOrderByCreatedAtDesc(1L) >> sent
         workspaceInvitationMapper.toSentDTO(sent) >> [dto]
@@ -321,5 +342,75 @@ class WorkspaceInvitationServiceTest extends Specification {
         then:
         thrown(BusinessException)
         0 * workspaceInvitationRepository.save(_)
+    }
+
+    def "resendInvitation - extends expiresAt and republishes the invitation-created event"() {
+        given:
+        def invitation = WorkspaceInvitation.builder()
+                .id(5L).invitedUser(invited).invitedBy(inviter).workspace(workspace)
+                .status(InvitationStatus.PENDING).role(WorkspaceRole.COLLABORATOR).expiresAt(pastExpiry).build()
+        userService.getAuthenticatedUser() >> inviter
+        workspaceInvitationRepository.findById(5L) >> Optional.of(invitation)
+        rateLimiterService.tryAcquire(_, _, _) >> true
+
+        when:
+        service.resendInvitation(5L)
+
+        then:
+        invitation.expiresAt.isAfter(LocalDateTime.now())
+        1 * workspaceInvitationRepository.save(invitation)
+        1 * auditLogService.record(workspace, AuditAction.INVITATION_SENT, inviter, invited)
+        1 * invitationEventPublisher.publishInvitationCreated({ it.invitationId() == 5L && it.invitedUserEmail() == "invited@example.com" })
+    }
+
+    def "resendInvitation - throws EntityNotFoundException when the caller did not send the invitation"() {
+        given:
+        def stranger = User.builder().id(99L).email("stranger@example.com").build()
+        def invitation = WorkspaceInvitation.builder()
+                .id(5L).invitedUser(invited).invitedBy(inviter).workspace(workspace)
+                .status(InvitationStatus.PENDING).expiresAt(futureExpiry).build()
+        userService.getAuthenticatedUser() >> stranger
+        workspaceInvitationRepository.findById(5L) >> Optional.of(invitation)
+
+        when:
+        service.resendInvitation(5L)
+
+        then:
+        thrown(EntityNotFoundException)
+        0 * workspaceInvitationRepository.save(_)
+    }
+
+    def "resendInvitation - throws BusinessException when the invitation was already answered"() {
+        given:
+        def invitation = WorkspaceInvitation.builder()
+                .id(5L).invitedUser(invited).invitedBy(inviter).workspace(workspace)
+                .status(InvitationStatus.ACCEPTED).expiresAt(futureExpiry).build()
+        userService.getAuthenticatedUser() >> inviter
+        workspaceInvitationRepository.findById(5L) >> Optional.of(invitation)
+
+        when:
+        service.resendInvitation(5L)
+
+        then:
+        thrown(BusinessException)
+        0 * workspaceInvitationRepository.save(_)
+    }
+
+    def "resendInvitation - throws RateLimitExceededException and saves nothing when the limiter rejects"() {
+        given:
+        def invitation = WorkspaceInvitation.builder()
+                .id(5L).invitedUser(invited).invitedBy(inviter).workspace(workspace)
+                .status(InvitationStatus.PENDING).expiresAt(pastExpiry).build()
+        userService.getAuthenticatedUser() >> inviter
+        workspaceInvitationRepository.findById(5L) >> Optional.of(invitation)
+        // Sin stub para tryAcquire: un Mock sin interacción declarada devuelve `false`.
+
+        when:
+        service.resendInvitation(5L)
+
+        then:
+        thrown(RateLimitExceededException)
+        0 * workspaceInvitationRepository.save(_)
+        0 * invitationEventPublisher.publishInvitationCreated(_)
     }
 }

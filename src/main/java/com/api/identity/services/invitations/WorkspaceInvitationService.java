@@ -40,6 +40,9 @@ public class WorkspaceInvitationService {
     // hora deja margen de sobra para uso normal y corta un script que intente floodear emails.
     private static final int MAX_INVITATION_BATCHES_PER_HOUR = 10;
     private static final Duration RATE_LIMIT_WINDOW = Duration.ofHours(1);
+    // Plazo para aceptar/rechazar antes de que la invitación quede vencida — ni tan corto que una
+    // ausencia de unos días la haga vencer sola, ni tan largo que quede colgada indefinidamente.
+    private static final long INVITATION_EXPIRY_DAYS = 7;
 
     private final WorkspaceInvitationRepository workspaceInvitationRepository;
     private final WorkspaceInvitationMapper workspaceInvitationMapper;
@@ -101,6 +104,7 @@ public class WorkspaceInvitationService {
                             .status(InvitationStatus.PENDING)
                             .workspace(workspaceToInvite)
                             .role(body.role())
+                            .expiresAt(LocalDateTime.now().plusDays(INVITATION_EXPIRY_DAYS))
                             .build());
                     auditLogService.record(workspaceToInvite, AuditAction.INVITATION_SENT, user, userInvited);
                     invitationEventPublisher.publishInvitationCreated(new InvitationCreatedEvent(
@@ -145,6 +149,47 @@ public class WorkspaceInvitationService {
         log.debug("Invitación {} cancelada por {}", invitationId, user.getId());
     }
 
+    /** No hay ningún canal de email en el suite (ver roadmap) — "reenviar" no reenvía nada por
+     * fuera, extiende expiresAt otros INVITATION_EXPIRY_DAYS días y vuelve a publicar el mismo
+     * InvitationCreatedEvent, así el invitado recibe otra notificación en vivo si su app la
+     * escucha. Mismo rate limit que enviar una invitación nueva — sin esto, reenviar en loop
+     * sería una forma de evadirlo. */
+    @Transactional
+    public void resendInvitation(Long invitationId) {
+        var user = userService.getAuthenticatedUser();
+
+        var invitation = workspaceInvitationRepository.findById(invitationId)
+                .orElseThrow(() -> new EntityNotFoundException("Invitación inexistente"));
+
+        if (!invitation.getInvitedBy().getId().equals(user.getId())) {
+            log.warn("El usuario {} intentó reenviar una invitación que no envió (id {})", user.getId(), invitationId);
+            throw new EntityNotFoundException("Invitación inexistente");
+        }
+        if (!InvitationStatus.PENDING.equals(invitation.getStatus())) {
+            throw new BusinessException("Solo se pueden reenviar invitaciones pendientes");
+        }
+
+        var rateLimitKey = "rate-limit:invitations:" + user.getId();
+        if (!rateLimiterService.tryAcquire(rateLimitKey, MAX_INVITATION_BATCHES_PER_HOUR, RATE_LIMIT_WINDOW)) {
+            throw new RateLimitExceededException(
+                    "Alcanzaste el límite de invitaciones enviadas. Probá de nuevo más tarde.");
+        }
+
+        invitation.setExpiresAt(LocalDateTime.now().plusDays(INVITATION_EXPIRY_DAYS));
+        workspaceInvitationRepository.save(invitation);
+        auditLogService.record(invitation.getWorkspace(), AuditAction.INVITATION_SENT, user, invitation.getInvitedUser());
+        invitationEventPublisher.publishInvitationCreated(new InvitationCreatedEvent(
+                invitation.getId(),
+                invitation.getWorkspace().getId(),
+                invitation.getWorkspace().getName(),
+                user.getEmail(),
+                invitation.getInvitedUser().getEmail(),
+                invitation.getRole(),
+                invitation.getCreatedAt(),
+                CorrelationIdHolder.current()));
+        log.info("Invitación {} reenviada por {} — nuevo vencimiento {}", invitationId, user.getEmail(), invitation.getExpiresAt());
+    }
+
     @Transactional
     public void acceptRejectInvitation(@Valid AcceptRejectInvitationDTO invitationDTO) {
         var user = userService.getAuthenticatedUser();
@@ -158,6 +203,9 @@ public class WorkspaceInvitationService {
         }
         if (!InvitationStatus.PENDING.equals(invitation.getStatus())) {
             throw new BusinessException("La invitación ya fue aceptada o rechazada");
+        }
+        if (invitation.getExpiresAt().isBefore(LocalDateTime.now())) {
+            throw new BusinessException("La invitación venció — pedile a quien te invitó que la reenvíe");
         }
         invitation.setStatus(invitationDTO.status() ? InvitationStatus.ACCEPTED : InvitationStatus.REJECTED);
         workspaceInvitationRepository.save(invitation);

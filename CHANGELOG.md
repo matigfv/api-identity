@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-09-02
+
+### Added
+- `WorkspaceInvitation.expiresAt` — set to 7 days out when an invitation is sent. New migration
+  `010__add_expires_at_to_workspace_invitations.sql` backfills existing rows as
+  `created_at + 7 days`. `acceptRejectInvitation` now rejects an expired invitation with a
+  `BusinessException` instead of letting it be accepted/rejected indefinitely.
+  `WorkspaceInvitationDTO`/`WorkspaceSentInvitationDTO` gained `expiresAt` and a derived `expired`
+  boolean (not a DB status — an expired invitation is still `PENDING` until someone acts on it,
+  this just lets the frontend show it as vencida instead of with the normal accept/reject/cancel
+  actions).
+- `PATCH /v1/invitations/{invitationId}/resend` — closes the other half of the roadmap gap ("no
+  hay acción de reenvío si el email nunca llega"). There's no email channel anywhere in the suite
+  (confirmed, see roadmap), so this doesn't resend an email — it extends `expiresAt` another 7
+  days and republishes the same `InvitationCreatedEvent` used for a brand-new invitation, so the
+  invited user gets another live notification if their app is listening. Same ownership check as
+  `cancelInvitation` (404 if you didn't send it), same status check (only `PENDING`), and the same
+  rate limit bucket as sending a new invitation — otherwise resend-in-a-loop would be a free way
+  around it.
+
 ## [1.9.1] - 2026-09-02
 
 ### Fixed

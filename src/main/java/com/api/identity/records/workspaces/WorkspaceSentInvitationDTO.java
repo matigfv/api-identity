@@ -13,5 +13,7 @@ public record WorkspaceSentInvitationDTO(
         String invitedUserEmail,
         InvitationStatus status,
         WorkspaceRole role,
-        LocalDateTime createdAt) implements Serializable {
+        LocalDateTime createdAt,
+        LocalDateTime expiresAt,
+        boolean expired) implements Serializable {
 }

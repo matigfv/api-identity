@@ -15,6 +15,7 @@ public interface WorkspaceInvitationMapper {
     @Mapping(target = "workspaceId", source = "workspace.id")
     @Mapping(target = "workspaceName", source = "workspace.name")
     @Mapping(target = "invitedByEmail", source = "invitedBy.email")
+    @Mapping(target = "expired", expression = "java(workspaceInvitation.getExpiresAt().isBefore(java.time.LocalDateTime.now()))")
     WorkspaceInvitationDTO toDTO(WorkspaceInvitation workspaceInvitation);
 
     List<WorkspaceInvitationDTO> toDTO(List<WorkspaceInvitation> workspaceInvitations);
@@ -22,6 +23,7 @@ public interface WorkspaceInvitationMapper {
     @Mapping(target = "workspaceId", source = "workspace.id")
     @Mapping(target = "workspaceName", source = "workspace.name")
     @Mapping(target = "invitedUserEmail", source = "invitedUser.email")
+    @Mapping(target = "expired", expression = "java(workspaceInvitation.getExpiresAt().isBefore(java.time.LocalDateTime.now()))")
     WorkspaceSentInvitationDTO toSentDTO(WorkspaceInvitation workspaceInvitation);
 
     List<WorkspaceSentInvitationDTO> toSentDTO(List<WorkspaceInvitation> workspaceInvitations);
