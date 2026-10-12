@@ -35,3 +35,7 @@ out/
 
 ### VS Code ###
 .vscode/
+
+### Archify / ATL ###
+.archify/
+.atl/
