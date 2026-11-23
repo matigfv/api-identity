@@ -28,4 +28,6 @@ databaseChangeLog:
       relativeToChangelogFile: true
   - include:
       file: 010__add_expires_at_to_workspace_invitations.sql
+      relativeToChangelogFile: true  - include:
+      file: 011__create_households.sql
       relativeToChangelogFile: true
